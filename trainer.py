@@ -1,5 +1,6 @@
 import torch
-from datasets import load_from_disk
+import datasets
+from datasets import Dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from huggingface_hub import HfApi, HfFolder, Repository
 
@@ -19,8 +20,9 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 # Set use_cache to False if needed
 model.config.use_cache = False
 
-# Load the tokenized dataset
-tokenized_dataset = load_from_disk("/mnt/data/tokenized_dataset")
+# Load the .arrow file as a dataset
+data_file = "tokenized_dataset/data-00000-of-00001.arrow"
+tokenized_dataset = Dataset.from_file(data_file)
 
 # Define training arguments with memory optimizations
 training_args = TrainingArguments(
