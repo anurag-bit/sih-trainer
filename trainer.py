@@ -22,6 +22,36 @@ model.config.use_cache = False
 
 # Load the dataset from Hugging Face
 dataset = load_dataset("prof-freakenstein/sihFinal")
+# Load the dataset from Hugging Face
+dataset = load_dataset("prof-freakenstein/sihFinal")
+
+# Print dataset information
+print("Dataset structure:")
+print(dataset)
+
+# Print the first few examples
+print("\nFirst few examples:")
+for i, example in enumerate(dataset['train'][:5]):
+    print(f"Example {i + 1}:")
+    print(example)
+    print()
+
+# Print column names
+print("Column names:")
+print(dataset['train'].column_names)
+
+# Load the tokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
+
+# Preprocess the dataset (tokenization)
+def preprocess_function(examples):
+    # Modify this function based on the actual structure of your dataset
+    inputs = [f"Human: {example['text'].split('Human: ')[-1]}" for example in examples['text']]
+    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=512)
+    return model_inputs
+
+# Apply preprocessing
+tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
 
 # Load the tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
