@@ -20,8 +20,7 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 # Set use_cache to False if needed
 model.config.use_cache = False
 
-# Load the dataset from Hugging Face
-dataset = load_dataset("prof-freakenstein/sihFinal")
+
 # Load the dataset from Hugging Face
 dataset = load_dataset("prof-freakenstein/sihFinal")
 
@@ -45,14 +44,20 @@ tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
 
 # Preprocess the dataset (tokenization)
 def preprocess_function(examples):
-    # Modify this function based on the actual structure of your dataset
-    inputs = [f"Human: {example['text'].split('Human: ')[-1]}" for example in examples['text']]
+    # Print the first example to understand its structure
+    print("First example in batch:")
+    print(examples['text'][0])
+    print()
+
+    # Process all examples in the batch
+    inputs = examples['text']
     model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=512)
     return model_inputs
 
 # Apply preprocessing
 tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
 
+# ... (rest of the code remains the same)
 # Load the tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
 
