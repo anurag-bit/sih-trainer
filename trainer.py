@@ -20,7 +20,7 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 model.config.use_cache = False
 
 # Load the tokenized dataset
-tokenized_dataset = load_from_disk("data-00000-of-00001.arrow")
+tokenized_dataset = load_from_disk("/mnt/data/tokenized_dataset")
 
 # Define training arguments with memory optimizations
 training_args = TrainingArguments(
