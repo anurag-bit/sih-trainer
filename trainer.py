@@ -21,8 +21,25 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 model.config.use_cache = False
 
 # Load the .arrow file as a dataset
-data_file = "tokenized_dataset/data-00000-of-00001.arrow"
-tokenized_dataset = Dataset.from_file(data_file)
+data_file = "/mnt/data/data-00000-of-00001.arrow"
+dataset = Dataset.from_file(data_file)
+
+# Load the tokenizer
+tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
+
+# Preprocess the dataset (tokenization)
+def preprocess_function(examples):
+    # Combine instruction and output for causal language modeling
+    inputs = examples['instruction'] + tokenizer.eos_token + examples['output']
+    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=128)
+
+    # Shift the labels for causal language modeling
+    labels = model_inputs["input_ids"].copy()
+    model_inputs["labels"] = labels
+    return model_inputs
+
+# Apply preprocessing
+tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset.column_names)
 
 # Define training arguments with memory optimizations
 training_args = TrainingArguments(
@@ -34,6 +51,7 @@ training_args = TrainingArguments(
     logging_dir='./logs',
     logging_steps=10,
     save_steps=10,
+    remove_unused_columns=False,  # Important to keep all columns
 )
 
 # Enable gradient checkpointing if available
