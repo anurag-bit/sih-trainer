@@ -21,7 +21,7 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 model.config.use_cache = False
 
 # Load the .arrow file as a dataset
-data_file = "/mnt/data/data-00000-of-00001.arrow"
+data_file = "tokenized_dataset/data-00000-of-00001.arrow"
 dataset = Dataset.from_file(data_file)
 
 # Load the tokenizer
