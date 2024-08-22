@@ -1,6 +1,6 @@
 import torch
 import datasets
-from datasets import Dataset
+from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from huggingface_hub import HfApi, HfFolder, Repository
 
@@ -13,45 +13,40 @@ def free_gpu_cache():
 # Replace with your actual API key
 hf_api_key = "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"
 
-# Load the Phi-3 model with eager attention implementation
-model_name = "google/gemma-2-2b-it"
+# Load the Gemma 2B model
+model_name = "google/gemma-2b-it"
 model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_key, attn_implementation='eager')
 
 # Set use_cache to False if needed
 model.config.use_cache = False
 
-# Load the .arrow file as a dataset
-data_file = "tokenized_dataset/data-00000-of-00001.arrow"
-dataset = Dataset.from_file(data_file)
+# Load the dataset from Hugging Face
+dataset = load_dataset("prof-freakenstein/sihFinal")
 
 # Load the tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
 
 # Preprocess the dataset (tokenization)
 def preprocess_function(examples):
-    # Combine instruction and output for causal language modeling
-    inputs = examples['instruction'] + tokenizer.eos_token + examples['output']
-    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=128)
-
-    # Shift the labels for causal language modeling
-    labels = model_inputs["input_ids"].copy()
-    model_inputs["labels"] = labels
+    # Combine instruction and response for causal language modeling
+    inputs = [f"Human: {instr}\n\nAssistant: {resp}" for instr, resp in zip(examples['instruction'], examples['response'])]
+    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=512)
     return model_inputs
 
 # Apply preprocessing
-tokenized_dataset = dataset.map(preprocess_function, batched=True, remove_columns=dataset.column_names)
+tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
 
 # Define training arguments with memory optimizations
 training_args = TrainingArguments(
     output_dir="./output",
     num_train_epochs=3,
-    per_device_train_batch_size=1,  # Further reduced batch size
+    per_device_train_batch_size=1,
     gradient_accumulation_steps=8,
     fp16=True,
     logging_dir='./logs',
     logging_steps=10,
     save_steps=10,
-    remove_unused_columns=False,  # Important to keep all columns
+    remove_unused_columns=False,
 )
 
 # Enable gradient checkpointing if available
@@ -63,7 +58,7 @@ if torch.cuda.is_available():
 trainer = Trainer(
     model=model,
     args=training_args,
-    train_dataset=tokenized_dataset,  # Load the train dataset
+    train_dataset=tokenized_dataset,
 )
 
 # Clear GPU cache before starting training
@@ -90,17 +85,14 @@ def upload_model_to_hub(model_dir, repo_name, model_id, hf_api_key):
     # Authenticate
     HfFolder.save_token(hf_api_key)
     api = HfApi()
-
     # Create a new repository
     try:
         api.create_repo(repo_id=model_id, private=False)
         print(f"Repository '{repo_name}' created successfully.")
     except Exception as e:
         print(f"Repository creation failed: {e}")
-
     # Clone the repository
     repo = Repository(local_dir=model_dir, clone_from=model_id, use_auth_token=hf_api_key)
-
     # Add files to the repository
     repo.push_to_hub(commit_message="Initial commit")
 
