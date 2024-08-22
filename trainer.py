@@ -20,7 +20,6 @@ model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_k
 # Set use_cache to False if needed
 model.config.use_cache = False
 
-
 # Load the dataset from Hugging Face
 dataset = load_dataset("prof-freakenstein/sihFinal")
 
@@ -35,37 +34,17 @@ for i, example in enumerate(dataset['train'][:5]):
     print(example)
     print()
 
-# Print column names
-print("Column names:")
-print(dataset['train'].column_names)
-
 # Load the tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
 
 # Preprocess the dataset (tokenization)
 def preprocess_function(examples):
-    # Print the first example to understand its structure
-    print("First example in batch:")
-    print(examples['text'][0])
-    print()
-
     # Process all examples in the batch
-    inputs = examples['text']
-    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=512)
-    return model_inputs
+    model_inputs = tokenizer(examples['text'], truncation=True, padding="max_length", max_length=512)
 
-# Apply preprocessing
-tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
+    # Set the labels to be the same as the input_ids
+    model_inputs["labels"] = model_inputs["input_ids"].copy()
 
-# ... (rest of the code remains the same)
-# Load the tokenizer
-tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
-
-# Preprocess the dataset (tokenization)
-def preprocess_function(examples):
-    # Combine instruction and response for causal language modeling
-    inputs = [f"Human: {instr}\n\nAssistant: {resp}" for instr, resp in zip(examples['instruction'], examples['response'])]
-    model_inputs = tokenizer(inputs, truncation=True, padding="max_length", max_length=512)
     return model_inputs
 
 # Apply preprocessing
