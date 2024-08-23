@@ -1,117 +1,114 @@
 import torch
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, DistributedSampler
 import datasets
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from huggingface_hub import HfApi, HfFolder, Repository
+import os
 
-# Function to clear GPU cache
+def setup(rank, world_size):
+    os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_PORT'] = '12355'
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+
+def cleanup():
+    dist.destroy_process_group()
+
 def free_gpu_cache():
     print("Clearing GPU cache...")
     torch.cuda.empty_cache()
     print("GPU cache cleared.")
 
-# Replace with your actual API key
-hf_api_key = "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"
+def train(rank, world_size):
+    setup(rank, world_size)
 
-# Load the Gemma 2B model
-model_name = "google/gemma-2b-it"
-model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_key, attn_implementation='eager')
+    hf_api_key = "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"
+    model_name = "google/gemma-2b-it"
 
-# Set use_cache to False if needed
-model.config.use_cache = False
+    # Load model
+    model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_key, attn_implementation='eager')
+    model.config.use_cache = False
+    model = model.to(rank)
+    model = DDP(model, device_ids=[rank])
 
-# Load the dataset from Hugging Face
-dataset = load_dataset("prof-freakenstein/sihFinal")
+    # Load dataset
+    dataset = load_dataset("prof-freakenstein/sihFinal")
 
-# Print dataset information
-print("Dataset structure:")
-print(dataset)
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
 
-# Print the first few examples
-print("\nFirst few examples:")
-for i, example in enumerate(dataset['train'][:5]):
-    print(f"Example {i + 1}:")
-    print(example)
-    print()
+    def preprocess_function(examples):
+        model_inputs = tokenizer(examples['text'], truncation=True, padding="max_length", max_length=512)
+        model_inputs["labels"] = model_inputs["input_ids"].copy()
+        return model_inputs
 
-# Load the tokenizer
-tokenizer = AutoTokenizer.from_pretrained(model_name, use_auth_token=hf_api_key)
+    tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
 
-# Preprocess the dataset (tokenization)
-def preprocess_function(examples):
-    # Process all examples in the batch
-    model_inputs = tokenizer(examples['text'], truncation=True, padding="max_length", max_length=512)
+    # Create DataLoader with DistributedSampler
+    train_sampler = DistributedSampler(tokenized_dataset, num_replicas=world_size, rank=rank)
+    train_dataloader = DataLoader(tokenized_dataset, sampler=train_sampler, batch_size=4)
 
-    # Set the labels to be the same as the input_ids
-    model_inputs["labels"] = model_inputs["input_ids"].copy()
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir="./output",
+        num_train_epochs=3,
+        per_device_train_batch_size=4,
+        gradient_accumulation_steps=2,
+        fp16=True,
+        logging_dir='./logs',
+        logging_steps=10,
+        save_steps=10,
+        remove_unused_columns=False,
+        dataloader_num_workers=4,
+        gradient_checkpointing=True,
+        optim="adamw_torch",
+        learning_rate=5e-5,
+        warmup_steps=500,
+        weight_decay=0.01,
+        evaluation_strategy="steps",
+        eval_steps=500,
+        report_to="tensorboard",
+    )
 
-    return model_inputs
+    # Create Trainer
+    trainer = Trainer(
+        model=model,
+        args=training_args,
+        train_dataset=tokenized_dataset,
+        data_collator=lambda data: dict((key, torch.stack([d[key] for d in data])) for key in data[0]),
+    )
 
-# Apply preprocessing
-tokenized_dataset = dataset['train'].map(preprocess_function, batched=True, remove_columns=dataset['train'].column_names)
-
-# Define training arguments with memory optimizations
-training_args = TrainingArguments(
-    output_dir="./output",
-    num_train_epochs=3,
-    per_device_train_batch_size=1,
-    gradient_accumulation_steps=8,
-    fp16=True,
-    logging_dir='./logs',
-    logging_steps=10,
-    save_steps=10,
-    remove_unused_columns=False,
-)
-
-# Enable gradient checkpointing if available
-if torch.cuda.is_available():
-    if hasattr(model, 'gradient_checkpointing_enable'):
-        model.gradient_checkpointing_enable()
-
-# Create a Trainer instance
-trainer = Trainer(
-    model=model,
-    args=training_args,
-    train_dataset=tokenized_dataset,
-)
-
-# Clear GPU cache before starting training
-free_gpu_cache()
-
-# Start training
-try:
-    trainer.train()
-except RuntimeError as e:
-    print(f"RuntimeError during training: {e}")
+    # Training
     free_gpu_cache()
-    raise
+    try:
+        trainer.train()
+    except RuntimeError as e:
+        print(f"RuntimeError during training: {e}")
+        free_gpu_cache()
+        raise
 
-# Save the trained model
-model_dir = "./your_trained_model"
-trainer.save_model(model_dir)
+    # Save model (only on main process)
+    if rank == 0:
+        model_dir = "./your_trained_model"
+        trainer.save_model(model_dir)
+        upload_model_to_hub(model_dir, "PHISIH", "PHISIH/PHISIH", hf_api_key)
 
-# Define repository details
-repo_name = "PHISIH"
-model_id = f"{repo_name}/{repo_name}"
+    cleanup()
 
-# Function to upload the model to the Hugging Face Hub
 def upload_model_to_hub(model_dir, repo_name, model_id, hf_api_key):
-    # Authenticate
     HfFolder.save_token(hf_api_key)
     api = HfApi()
-    # Create a new repository
     try:
         api.create_repo(repo_id=model_id, private=False)
         print(f"Repository '{repo_name}' created successfully.")
     except Exception as e:
         print(f"Repository creation failed: {e}")
-    # Clone the repository
+
     repo = Repository(local_dir=model_dir, clone_from=model_id, use_auth_token=hf_api_key)
-    # Add files to the repository
     repo.push_to_hub(commit_message="Initial commit")
 
-# Upload the model
-try:
-    upload_model_to_hub(model_dir, repo_name, model_id, hf_api_key)
-except Exception as e:
-    print(f"Error uploading model to Hugging Face Hub: {e}")
+if __name__ == "__main__":
+    world_size = torch.cuda.device_count()
+    torch.multiprocessing.spawn(train, args=(world_size,), nprocs=world_size, join=True)
