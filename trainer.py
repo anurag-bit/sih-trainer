@@ -1,20 +1,25 @@
 import torch
-import datasets
+import os
+import logging
+import traceback
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer
 from huggingface_hub import HfApi, HfFolder, Repository
-import logging
-import sys
-import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+def setup_rocm_environment():
+    # Set necessary environment variables for ROCm
+    os.environ['HSA_OVERRIDE_GFX_VERSION'] = '10.3.0'
+    os.environ['HCC_AMDGPU_TARGET'] = 'gfx1030'  # Adjust if necessary for MI210
+    logger.info("ROCm environment variables set")
+
 def free_memory():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-        logger.info("GPU cache cleared")
+        logger.info("HIP memory cleared")
     else:
         import gc
         gc.collect()
@@ -22,18 +27,20 @@ def free_memory():
 
 def train():
     try:
+        setup_rocm_environment()
+
         hf_api_key = "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"
         model_name = "google/gemma-2b-it"
 
         logger.info("Loading model")
-        model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_key, attn_implementation='eager')
+        model = AutoModelForCausalLM.from_pretrained(model_name, use_auth_token=hf_api_key)
         model.config.use_cache = False
 
         if torch.cuda.is_available():
-            logger.info(f"Moving model to GPU")
+            logger.info(f"Moving model to AMD Instinct MI210")
             model = model.to('cuda')
         else:
-            logger.warning("No GPU detected. Training will proceed on CPU, which may be very slow.")
+            logger.warning("No AMD Instinct MI210 detected. Training will proceed on CPU, which may be very slow.")
 
         logger.info("Loading dataset")
         dataset = load_dataset("prof-freakenstein/sihFinal")
@@ -53,15 +60,15 @@ def train():
         training_args = TrainingArguments(
             output_dir="./output",
             num_train_epochs=3,
-            per_device_train_batch_size=1 if torch.cuda.is_available() else 1,
-            gradient_accumulation_steps=8,
-            fp16=torch.cuda.is_available(),
+            per_device_train_batch_size=32,  # Adjust based on MI210 memory
+            gradient_accumulation_steps=1,
+            fp16=True,
             logging_dir='./logs',
             logging_steps=10,
             save_steps=100,
             save_total_limit=2,
             remove_unused_columns=False,
-            dataloader_num_workers=0,  # Reduced for CPU training
+            dataloader_num_workers=4,
             gradient_checkpointing=True,
             optim="adamw_torch",
             learning_rate=5e-5,
@@ -110,10 +117,10 @@ def upload_model_to_hub(model_dir, repo_name, model_id, hf_api_key):
 if __name__ == "__main__":
     try:
         if torch.cuda.is_available():
-            num_gpus = torch.cuda.device_count()
-            logger.info(f"Starting training on {num_gpus} GPU(s)")
+            num_devices = torch.cuda.device_count()
+            logger.info(f"Starting training on {num_devices} AMD Instinct MI210 accelerator(s)")
         else:
-            logger.warning("No GPUs detected. Starting training on CPU.")
+            logger.warning("No AMD Instinct MI210 accelerators detected. Starting training on CPU.")
         train()
     except Exception as e:
         logger.error(f"Error in main process: {e}")
